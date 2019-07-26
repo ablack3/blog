@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="Hugo 0.56.0" />
+
+
+<title>Event Sessionization in Health Services Research - A blog mostly about R</title>
+<meta property="og:title" content="Event Sessionization in Health Services Research - A blog mostly about R">
+
+
+  <link href='/favicon.ico' rel='icon' type='image/x-icon'/>
+
+
+
+  
+
+
+
+
+
+
+
+<link rel="stylesheet" href="/css/fonts.css" media="all">
+<link rel="stylesheet" href="/css/main.css" media="all">
+
+
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header class="header">
+        <nav class="nav">
+  <a href="/" class="nav-logo">
+    <img src="/images/logo.png"
+         width="50"
+         height="50"
+         alt="Logo">
+  </a>
+
+  <ul class="nav-links">
+    
+    <li><a href="/about/">About</a></li>
+    
+    <li><a href="https://github.com/ablack3">GitHub</a></li>
+    
+  </ul>
+</nav>
+
+      </header>
+
+
+<main class="content" role="main">
+
+  <article class="article">
+    
+    <span class="article-duration">2 min read</span>
+    
+
+    <h1 class="article-title">Event Sessionization in Health Services Research</h1>
+
+    
+    <span class="article-date">2019-07-26</span>
+    
+
+    <div class="article-content">
+      
+
+
+<p>Often the data we work with health services research fits the definition of event sourced data. In software development <em>Event Sourcing</em> has a specific meaning that I am not qualified to explain precisely. Basically any changes to a system are captured as event records. When changes happen they are recorded as event records and the current state of the system at any point in time can be constructed by aggregating all of the event records. This sounds abstract but it is really very common. For example thing about accounting. The records of transactions are the real source of truth and account balances can be inferred at any point in time by aggregating the data in all of the transaction records.</p>
+<p>I think this concept is strongly applicable to healthcare. Two major sources of data for observational research in healthcare are administrative claims data and electronic medical record data. Both of these data sources can be thought of as event sourced systems in the sense that they record specific events that happen to patients. The current health state of a patient at any point in time can be inferred from a starting state plus the addition of all records of events (diagnoses, procedures, lab tests, etc).</p>
+<p>When we start thinking about healthcare data in an event sourced type framework we can borrow additional concepts from other domains where this type of data exists. Consider for example the problem of sessionization in web analytics. When we visit a website many of our actions like mouse clicks are recorded along with a time stamp and stored in a database. A common analytic task in this domain is to collapse records of events into sessions. <a href="https://www.vertica.com/docs/9.2.x/HTML/Content/Authoring/AnalyzingData/SQLAnalytics/SessionizationWithEvent-basedWindows.htm">This is so common that some databases even include analytic functions for this specific task</a>. While an event is a very granular representation actions a user takes on a website, a session represents an higher level interaction. For example a single session would include logging in to a merchant’s website, serarching for a product, adding something to a cart, and checkout. There are lots of mouse click events in this one session. Similarly a “session” in health care might be a patient’s entire stay at a hospital during which multiple claims can be generated.</p>
+<div id="the-goal" class="section level1">
+<h1>The goal</h1>
+<p>Let’s write a function that will sessionize</p>
+</div>
+
+    </div>
+  </article>
+
+  
+
+
+</main>
+
+      <footer class="footer">
+        <ul class="footer-links">
+          <li>
+            <a href="/index.xml" type="application/rss+xml" target="_blank">RSS feed</a>
+          </li>
+          <li>
+            <a href="https://gohugo.io/" class="footer-links-kudos">Made with <img src="/images/hugo-logo.png" alt="Img link to Hugo website" width="22" height="22"></a>
+          </li>
+        </ul>
+      </footer>
+
+    </div>
+    
+
+    
+
+    
+  </body>
+</html>
+

@@ -1,0 +1,184 @@
+---
+title: Event Sessionization in Health Services Research
+author: Adam Black
+date: '2019-07-26'
+slug: event-sessionization-in-health-services-research
+categories: []
+tags:
+  - R
+---
+
+```{r setup, include=F}
+```
+
+
+Often the data we work with health services research fits the definition of event sourced data. In software development *Event Sourcing* has a specific meaning that I am not qualified to explain precisely. Basically any changes to a system are captured as event records. When changes happen they are recorded as event records and the current state of the system at any point in time can be constructed by aggregating all of the event records. This sounds abstract but it is really very common. For example thing about accounting. The records of transactions are the real source of truth and account balances can be inferred at any point in time by aggregating the data in all of the transaction records.
+
+I think this concept is strongly applicable to healthcare. Two major sources of data for observational research in healthcare are administrative claims data and electronic medical record data. Both of these data sources can be thought of as event sourced systems in the sense that they record specific events that happen to patients. The current health state of a patient at any point in time can be inferred from a starting state plus the addition of all records of events (diagnoses, procedures, lab tests, etc). 
+
+When we start thinking about healthcare data in an event sourced type framework we can borrow additional concepts from other domains where this type of data exists. Consider for example the problem of sessionization in web analytics. When we visit a website many of our actions like mouse clicks are recorded along with a time stamp and stored in a database. A common analytic task in this domain is to collapse records of events into sessions. [This is so common that some databases even include analytic functions for this specific task](https://www.vertica.com/docs/9.2.x/HTML/Content/Authoring/AnalyzingData/SQLAnalytics/SessionizationWithEvent-basedWindows.htm). While an event is a very granular representation actions a user takes on a website, a session represents an higher level interaction. For example a single session would include logging in to a merchant's website, serarching for a product, adding something to a cart, and checkout. There are lots of mouse click events in this one session. Similarly a "session" in health care might be a patient's entire stay at a hospital during which multiple claims can be generated. 
+
+# The Goal
+Let's write a function that will sessionize event data derived from administrative claims. In order to make sure our function eventually behaves as expected we will first write a test that defines expected behavior. We im"agine our data has a patient key (patkey) as well as a start date and end date. We want to collapse records that have overlapping date ranges or almost overlapping date ranges. What we mean by "almost overlapping" is ultimately up to the user and depends on the context. In some cases we might want to consider two records part of the same event even if there is a one or two day gap between the date ranges. In other cases a one day gap would indicate different "sessions".
+
+
+```{r}
+suppressPackageStartupMessages(library(dplyr))
+
+# create some sample data
+df <- tibble::tribble(
+        ~patkey,   ~start_date,       ~end_date,        ~description,
+        1,         "11/01/2017",  "11/10/2017", "The initial event",
+        1,         "11/02/2017",  "11/03/2017", "A two day event that occurs entirely within the initial event", 
+        1,         "11/02/2017",  "11/02/2017", "A one day event that occurs entirely within the initial event",
+        1,         "10/31/2017",  "11/02/2017", "A three day event that with the initial event",
+        1,         "11/10/2017",  "11/10/2017", "A one day event that occurs on last day of the initial event",
+        1,         "11/10/2017",  "11/12/2017", "A two day event that occurs on last day of the initial event",
+        1,         "11/13/2017",  "11/13/2017", "A one day event that occurs one day after the previous event",
+        1,         "11/15/2017",  "11/15/2017", "A one day event that occurs two days after the previous event",
+        2,         "11/01/2017",  "11/10/2017", "The initial event for a second patient",
+        2,         "11/02/2017",  "11/03/2017", "A two day event that occurs entirely within the initial event", 
+        2,         "11/02/2017",  "11/02/2017", "A one day event that occurs entirely within the initial event",
+        2,         "11/10/2017",  "11/10/2017", "A one day event that occurs on last day of the initial event",
+        2,         "11/10/2017",  "11/12/2017", "A two day event that occurs on last day of the initial event",
+        2,         "11/13/2017",  "11/13/2017", "A one day event that occurs one day after the previous event",
+        2,         "11/15/2017",  "11/15/2017", "A one day event that occurs two days after the previous event") %>%
+    mutate_at(vars(ends_with("date")), lubridate::mdy)
+
+ 
+```
+
+Our strategy will by to first order the data so that eariler events come first and when two events start on the same day the one with the longest duration comes first. Then we will a new variable that represents the  where the current session end date is. This is given by the `cummax(end_date)` function. Since cummax doesn't work with dates we need to convert the dates to a number to do the calculation and then convert the numbers back to a date.
+
+```{r}
+df %>% 
+  select(-description) %>% 
+    #  create sessions that group overlapping date ranges together
+    arrange(patkey, start_date, desc(end_date)) %>%
+    group_by(patkey) %>%
+    # max_end_date_ should be monotonic increasing which is important for this to work.
+    mutate(max_end_date = zoo::as.Date(cummax(as.integer(end_date))))
+
+```
+
+
+What is important here is that `max_end_date` is monotonic increasing within patients. This just means that within a given patient's records each max_end_date is either the same or after the previous `max_end_date`. This condition should be satisfied because of the `cummax` function. The output of `cummax` should always be monotonic increasing (ignoring the possibility of missing values). `max_end_date` is the potential end of a session. 
+
+In order to determine where to end sessions we need to answer the question does the current record fall within the previous record's session? The `lag(max_end_date)` will give us the end of the previous session. We will create a parameter to this function, `max_gap`, that will represent the maximum allowed gap to consider two records part of the same session.
+
+```{r}
+max_gap <- 1
+
+df %>% 
+  select(-description) %>% 
+    arrange(patkey, start_date, desc(end_date)) %>%
+    group_by(patkey) %>%
+    mutate(max_end_date = zoo::as.Date(cummax(as.integer(end_date)))) %>%
+    mutate(lag_max_end_date = lag(max_end_date)) %>%
+    # calculate the difference between the start of the current record and the end of the session under consideration
+    mutate(dif = as.integer(start_date - lag_max_end_date)) %>%
+    mutate(new_session = ifelse(is.na(dif) | dif > max_gap, 1, 0)) %>%
+    mutate(session_id = cumsum(new_session)) 
+
+```
+
+The session_id variable is really what we are after here. Within patkey the session_id uniquely identifies session/encounters/episodes or whatever term we want to use for them. If we concatenate patkey and session_id then we have a unique identifier for sessions.
+
+
+Let's now encapsulate this logic in a function and add some bells and whistles. We will use some tidyeval to allow the user to supply unquoted variable names for the start and end date as well add some data cleaning. I decided to make the `group` argument a string. It just kind of made sense to me because it reminded me of the `by` argument in dplyr's join functions.
+
+
+```{r}
+add_session_id.data.frame <- function(tbl_dbi, start_date, end_date, group, max_gap = 0L, clean_input = T, debug = F){
+  
+  stopifnot(is.character(group), is.numeric(max_gap), is.logical(clean_input), is.logical(debug))
+  start_date <- rlang::enquo(start_date)
+  end_date <- rlang::enquo(end_date)
+
+  # cant get these to work
+  # if(lubridate::is.Date(pull(tbl_dbi, !!start_date))){
+  #   stop("start_date is not of date type. Make sure start_date and end_date are actual date typed variables.")
+  # }
+  # if(lubridate::is.Date(pull(tbl_dbi, !!end_date))){
+  #   stop(  "end_date is not of date type. Make sure start_date and end_date are actual date typed variables.")
+  # }
+
+  group <- rlang::parse_expr(group)
+
+  tbl_dbi %>%
+    ungroup() %>%
+    # clean data
+    {if(clean_input) filter(., !is.na(!!end_date), !is.na(!!start_date), !!end_date >= !!start_date) else .} %>%
+    # create temp variables that end with _
+    mutate(start_date_ = !!start_date, end_date_ = !!end_date) %>%
+    #  create sessions that group overlapping date ranges together
+    arrange(!!group, start_date_, desc(end_date_)) %>%
+    group_by(!!group) %>%
+    mutate(max_end_date_ = zoo::as.Date(cummax(as.integer(end_date_)))) %>%
+    mutate(lag_max_end_date_ = lag(max_end_date_)) %>%
+    mutate(dif_ = as.integer(start_date_ - lag_max_end_date_)) %>%
+    mutate(new_session_ = ifelse(is.na(dif_) | dif_ > max_gap, 1, 0)) %>%
+    mutate(session_id = cumsum(new_session_)) %>%
+    # This is a reasonable way to add conditional logic to dplyr pipelines it seems to me
+    {if(!debug){select(., -start_date_, -end_date_, -max_end_date_, -lag_max_end_date_, -dif_, -new_session_)} else .}
+
+}
+```
+
+
+Let's test it!
+```{r}
+df %>% 
+  add_session_id.data.frame(start_date = start_date, end_date = end_date, group = "patkey", debug = T) %>% 
+  select(-description)
+
+
+```
+
+# Databases
+Since dplyr works on databases by generating SQL we can use this in a database as well. However we do have to write a different version of the function to make sure the dplyr to SQL translation happens correctly. We also need a database that supports analytic queries so SQLite will not work. 
+
+
+
+```{r}
+# simulate a database connection
+tbl_dbi <- dbplyr::tbl_lazy(df)
+
+# A version of add_session_id that works on (some) databases
+add_session_id.tbl_dbi <- function(tbl_dbi, start_date, end_date, group, max_gap = 0L, clean_input = T, debug = F){
+  start_date <- rlang::enquo(start_date)
+  end_date <- rlang::enquo(end_date)
+  group <- rlang::parse_expr(group)
+ 
+  tbl_dbi %>%
+    ungroup() %>%
+    # clean data
+    {if(clean_input) filter(., !is.na(!!end_date), !is.na(!!start_date), !!end_date >= !!start_date) else .} %>%
+    # create temp variables that end with _
+    mutate(start_date_ = !!start_date, end_date_ = !!end_date) %>%
+    #  create sessions that group overlapping date ranges together
+    # arrange(!!group, start_date_, desc(end_date_)) %>%
+    group_by(!!group) %>%
+    mutate(lag_end_date_ = order_by(start_date_, lag(end_date_))) %>%
+    # max_end_date_ is monotonic increasing which is important for this to work.
+    dbplyr::window_order(start_date_, desc(end_date_)) %>%
+    mutate(max_end_date_ = cummax(end_date)) %>%
+    # mutate(max_end_date_ = ifelse(!is.na(lag_end_date_) & end_date_ < lag_end_date_, lag_end_date_, end_date_)) %>% # old logic
+    mutate(lag_max_end_date_ = order_by(start_date_, lag(max_end_date_))) %>%
+    # note that datediff is a sql server function. If there is a function in any package or the global environment that is called dy then this function will fail.
+    # mutate(dif_ = datediff(dy, lag_max_end_date_, start_date_)) %>%
+    mutate(dif_ = start_date_ - lag_max_end_date_) %>%
+    mutate(new_session_ = ifelse(is.na(lag_end_date_) | dif_ > max_gap, 1, 0)) %>%
+    mutate(session_id = order_by(start_date_, cumsum(new_session_))) %>%
+    {if(!debug){select(., -start_date_, -end_date_, -lag_end_date_, -max_end_date_, -lag_max_end_date_, -dif_, -new_session_)} else .}
+}
+
+# Look at the generated SQL code
+tbl_dbi %>% 
+  add_session_id.tbl_dbi(start_date, end_date, group = "patkey") %>% 
+  show_query()
+```
+
+
+
+
