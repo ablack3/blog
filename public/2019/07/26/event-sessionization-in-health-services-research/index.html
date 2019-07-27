@@ -22,6 +22,11 @@
 
 
 
+
+<link href='//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/github.min.css' rel='stylesheet' type='text/css' />
+
+
+
 <link rel="stylesheet" href="/css/fonts.css" media="all">
 <link rel="stylesheet" href="/css/main.css" media="all">
 
@@ -55,7 +60,7 @@
 
   <article class="article">
     
-    <span class="article-duration">2 min read</span>
+    <span class="article-duration">11 min read</span>
     
 
     <h1 class="article-title">Event Sessionization in Health Services Research</h1>
@@ -72,8 +77,202 @@
 <p>I think this concept is strongly applicable to healthcare. Two major sources of data for observational research in healthcare are administrative claims data and electronic medical record data. Both of these data sources can be thought of as event sourced systems in the sense that they record specific events that happen to patients. The current health state of a patient at any point in time can be inferred from a starting state plus the addition of all records of events (diagnoses, procedures, lab tests, etc).</p>
 <p>When we start thinking about healthcare data in an event sourced type framework we can borrow additional concepts from other domains where this type of data exists. Consider for example the problem of sessionization in web analytics. When we visit a website many of our actions like mouse clicks are recorded along with a time stamp and stored in a database. A common analytic task in this domain is to collapse records of events into sessions. <a href="https://www.vertica.com/docs/9.2.x/HTML/Content/Authoring/AnalyzingData/SQLAnalytics/SessionizationWithEvent-basedWindows.htm">This is so common that some databases even include analytic functions for this specific task</a>. While an event is a very granular representation actions a user takes on a website, a session represents an higher level interaction. For example a single session would include logging in to a merchant’s website, serarching for a product, adding something to a cart, and checkout. There are lots of mouse click events in this one session. Similarly a “session” in health care might be a patient’s entire stay at a hospital during which multiple claims can be generated.</p>
 <div id="the-goal" class="section level1">
-<h1>The goal</h1>
-<p>Let’s write a function that will sessionize</p>
+<h1>The Goal</h1>
+<p>Let’s write a function that will sessionize event data derived from administrative claims. In order to make sure our function eventually behaves as expected we will first write a test that defines expected behavior. We im“agine our data has a patient key (patkey) as well as a start date and end date. We want to collapse records that have overlapping date ranges or almost overlapping date ranges. What we mean by”almost overlapping&quot; is ultimately up to the user and depends on the context. In some cases we might want to consider two records part of the same event even if there is a one or two day gap between the date ranges. In other cases a one day gap would indicate different “sessions”.</p>
+<pre class="r"><code>suppressPackageStartupMessages(library(dplyr))
+
+# create some sample data
+df &lt;- tibble::tribble(
+        ~patkey,   ~start_date,       ~end_date,        ~description,
+        1,         &quot;11/01/2017&quot;,  &quot;11/10/2017&quot;, &quot;The initial event&quot;,
+        1,         &quot;11/02/2017&quot;,  &quot;11/03/2017&quot;, &quot;A two day event that occurs entirely within the initial event&quot;, 
+        1,         &quot;11/02/2017&quot;,  &quot;11/02/2017&quot;, &quot;A one day event that occurs entirely within the initial event&quot;,
+        1,         &quot;10/31/2017&quot;,  &quot;11/02/2017&quot;, &quot;A three day event that with the initial event&quot;,
+        1,         &quot;11/10/2017&quot;,  &quot;11/10/2017&quot;, &quot;A one day event that occurs on last day of the initial event&quot;,
+        1,         &quot;11/10/2017&quot;,  &quot;11/12/2017&quot;, &quot;A two day event that occurs on last day of the initial event&quot;,
+        1,         &quot;11/13/2017&quot;,  &quot;11/13/2017&quot;, &quot;A one day event that occurs one day after the previous event&quot;,
+        1,         &quot;11/15/2017&quot;,  &quot;11/15/2017&quot;, &quot;A one day event that occurs two days after the previous event&quot;,
+        2,         &quot;11/01/2017&quot;,  &quot;11/10/2017&quot;, &quot;The initial event for a second patient&quot;,
+        2,         &quot;11/02/2017&quot;,  &quot;11/03/2017&quot;, &quot;A two day event that occurs entirely within the initial event&quot;, 
+        2,         &quot;11/02/2017&quot;,  &quot;11/02/2017&quot;, &quot;A one day event that occurs entirely within the initial event&quot;,
+        2,         &quot;11/10/2017&quot;,  &quot;11/10/2017&quot;, &quot;A one day event that occurs on last day of the initial event&quot;,
+        2,         &quot;11/10/2017&quot;,  &quot;11/12/2017&quot;, &quot;A two day event that occurs on last day of the initial event&quot;,
+        2,         &quot;11/13/2017&quot;,  &quot;11/13/2017&quot;, &quot;A one day event that occurs one day after the previous event&quot;,
+        2,         &quot;11/15/2017&quot;,  &quot;11/15/2017&quot;, &quot;A one day event that occurs two days after the previous event&quot;) %&gt;%
+    mutate_at(vars(ends_with(&quot;date&quot;)), lubridate::mdy)</code></pre>
+<p>Our strategy will by to first order the data so that eariler events come first and when two events start on the same day the one with the longest duration comes first. Then we will a new variable that represents the where the current session end date is. This is given by the <code>cummax(end_date)</code> function. Since cummax doesn’t work with dates we need to convert the dates to a number to do the calculation and then convert the numbers back to a date.</p>
+<pre class="r"><code>df %&gt;% 
+  select(-description) %&gt;% 
+    #  create sessions that group overlapping date ranges together
+    arrange(patkey, start_date, desc(end_date)) %&gt;%
+    group_by(patkey) %&gt;%
+    # max_end_date_ should be monotonic increasing which is important for this to work.
+    mutate(max_end_date = zoo::as.Date(cummax(as.integer(end_date))))</code></pre>
+<pre><code>## # A tibble: 15 x 4
+## # Groups:   patkey [2]
+##    patkey start_date end_date   max_end_date
+##     &lt;dbl&gt; &lt;date&gt;     &lt;date&gt;     &lt;date&gt;      
+##  1      1 2017-10-31 2017-11-02 2017-11-02  
+##  2      1 2017-11-01 2017-11-10 2017-11-10  
+##  3      1 2017-11-02 2017-11-03 2017-11-10  
+##  4      1 2017-11-02 2017-11-02 2017-11-10  
+##  5      1 2017-11-10 2017-11-12 2017-11-12  
+##  6      1 2017-11-10 2017-11-10 2017-11-12  
+##  7      1 2017-11-13 2017-11-13 2017-11-13  
+##  8      1 2017-11-15 2017-11-15 2017-11-15  
+##  9      2 2017-11-01 2017-11-10 2017-11-10  
+## 10      2 2017-11-02 2017-11-03 2017-11-10  
+## 11      2 2017-11-02 2017-11-02 2017-11-10  
+## 12      2 2017-11-10 2017-11-12 2017-11-12  
+## 13      2 2017-11-10 2017-11-10 2017-11-12  
+## 14      2 2017-11-13 2017-11-13 2017-11-13  
+## 15      2 2017-11-15 2017-11-15 2017-11-15</code></pre>
+<p>What is important here is that <code>max_end_date</code> is monotonic increasing within patients. This just means that within a given patient’s records each max_end_date is either the same or after the previous <code>max_end_date</code>. This condition should be satisfied because of the <code>cummax</code> function. The output of <code>cummax</code> should always be monotonic increasing (ignoring the possibility of missing values). <code>max_end_date</code> is the potential end of a session.</p>
+<p>In order to determine where to end sessions we need to answer the question does the current record fall within the previous record’s session? The <code>lag(max_end_date)</code> will give us the end of the previous session. We will create a parameter to this function, <code>max_gap</code>, that will represent the maximum allowed gap to consider two records part of the same session.</p>
+<pre class="r"><code>max_gap &lt;- 1
+
+df %&gt;% 
+  select(-description) %&gt;% 
+    arrange(patkey, start_date, desc(end_date)) %&gt;%
+    group_by(patkey) %&gt;%
+    mutate(max_end_date = zoo::as.Date(cummax(as.integer(end_date)))) %&gt;%
+    mutate(lag_max_end_date = lag(max_end_date)) %&gt;%
+    # calculate the difference between the start of the current record and the end of the session under consideration
+    mutate(dif = as.integer(start_date - lag_max_end_date)) %&gt;%
+    mutate(new_session = ifelse(is.na(dif) | dif &gt; max_gap, 1, 0)) %&gt;%
+    mutate(session_id = cumsum(new_session)) </code></pre>
+<pre><code>## # A tibble: 15 x 8
+## # Groups:   patkey [2]
+##    patkey start_date end_date   max_end_date lag_max_end_date   dif
+##     &lt;dbl&gt; &lt;date&gt;     &lt;date&gt;     &lt;date&gt;       &lt;date&gt;           &lt;int&gt;
+##  1      1 2017-10-31 2017-11-02 2017-11-02   NA                  NA
+##  2      1 2017-11-01 2017-11-10 2017-11-10   2017-11-02          -1
+##  3      1 2017-11-02 2017-11-03 2017-11-10   2017-11-10          -8
+##  4      1 2017-11-02 2017-11-02 2017-11-10   2017-11-10          -8
+##  5      1 2017-11-10 2017-11-12 2017-11-12   2017-11-10           0
+##  6      1 2017-11-10 2017-11-10 2017-11-12   2017-11-12          -2
+##  7      1 2017-11-13 2017-11-13 2017-11-13   2017-11-12           1
+##  8      1 2017-11-15 2017-11-15 2017-11-15   2017-11-13           2
+##  9      2 2017-11-01 2017-11-10 2017-11-10   NA                  NA
+## 10      2 2017-11-02 2017-11-03 2017-11-10   2017-11-10          -8
+## 11      2 2017-11-02 2017-11-02 2017-11-10   2017-11-10          -8
+## 12      2 2017-11-10 2017-11-12 2017-11-12   2017-11-10           0
+## 13      2 2017-11-10 2017-11-10 2017-11-12   2017-11-12          -2
+## 14      2 2017-11-13 2017-11-13 2017-11-13   2017-11-12           1
+## 15      2 2017-11-15 2017-11-15 2017-11-15   2017-11-13           2
+## # … with 2 more variables: new_session &lt;dbl&gt;, session_id &lt;dbl&gt;</code></pre>
+<p>The session_id variable is really what we are after here. Within patkey the session_id uniquely identifies session/encounters/episodes or whatever term we want to use for them. If we concatenate patkey and session_id then we have a unique identifier for sessions.</p>
+<p>Let’s now encapsulate this logic in a function and add some bells and whistles. We will use some tidyeval to allow the user to supply unquoted variable names for the start and end date as well add some data cleaning. I decided to make the <code>group</code> argument a string. It just kind of made sense to me because it reminded me of the <code>by</code> argument in dplyr’s join functions.</p>
+<pre class="r"><code>add_session_id.data.frame &lt;- function(tbl_dbi, start_date, end_date, group, max_gap = 0L, clean_input = T, debug = F){
+  
+  stopifnot(is.character(group), is.numeric(max_gap), is.logical(clean_input), is.logical(debug))
+  start_date &lt;- rlang::enquo(start_date)
+  end_date &lt;- rlang::enquo(end_date)
+
+  # cant get these to work
+  # if(lubridate::is.Date(pull(tbl_dbi, !!start_date))){
+  #   stop(&quot;start_date is not of date type. Make sure start_date and end_date are actual date typed variables.&quot;)
+  # }
+  # if(lubridate::is.Date(pull(tbl_dbi, !!end_date))){
+  #   stop(  &quot;end_date is not of date type. Make sure start_date and end_date are actual date typed variables.&quot;)
+  # }
+
+  group &lt;- rlang::parse_expr(group)
+
+  tbl_dbi %&gt;%
+    ungroup() %&gt;%
+    # clean data
+    {if(clean_input) filter(., !is.na(!!end_date), !is.na(!!start_date), !!end_date &gt;= !!start_date) else .} %&gt;%
+    # create temp variables that end with _
+    mutate(start_date_ = !!start_date, end_date_ = !!end_date) %&gt;%
+    #  create sessions that group overlapping date ranges together
+    arrange(!!group, start_date_, desc(end_date_)) %&gt;%
+    group_by(!!group) %&gt;%
+    mutate(max_end_date_ = zoo::as.Date(cummax(as.integer(end_date_)))) %&gt;%
+    mutate(lag_max_end_date_ = lag(max_end_date_)) %&gt;%
+    mutate(dif_ = as.integer(start_date_ - lag_max_end_date_)) %&gt;%
+    mutate(new_session_ = ifelse(is.na(dif_) | dif_ &gt; max_gap, 1, 0)) %&gt;%
+    mutate(session_id = cumsum(new_session_)) %&gt;%
+    # This is a reasonable way to add conditional logic to dplyr pipelines it seems to me
+    {if(!debug){select(., -start_date_, -end_date_, -max_end_date_, -lag_max_end_date_, -dif_, -new_session_)} else .}
+
+}</code></pre>
+<p>Let’s test it!</p>
+<pre class="r"><code>df %&gt;% 
+  add_session_id.data.frame(start_date = start_date, end_date = end_date, group = &quot;patkey&quot;, debug = T) %&gt;% 
+  select(-description)</code></pre>
+<pre><code>## # A tibble: 15 x 10
+## # Groups:   patkey [2]
+##    patkey start_date end_date   start_date_ end_date_  max_end_date_
+##     &lt;dbl&gt; &lt;date&gt;     &lt;date&gt;     &lt;date&gt;      &lt;date&gt;     &lt;date&gt;       
+##  1      1 2017-10-31 2017-11-02 2017-10-31  2017-11-02 2017-11-02   
+##  2      1 2017-11-01 2017-11-10 2017-11-01  2017-11-10 2017-11-10   
+##  3      1 2017-11-02 2017-11-03 2017-11-02  2017-11-03 2017-11-10   
+##  4      1 2017-11-02 2017-11-02 2017-11-02  2017-11-02 2017-11-10   
+##  5      1 2017-11-10 2017-11-12 2017-11-10  2017-11-12 2017-11-12   
+##  6      1 2017-11-10 2017-11-10 2017-11-10  2017-11-10 2017-11-12   
+##  7      1 2017-11-13 2017-11-13 2017-11-13  2017-11-13 2017-11-13   
+##  8      1 2017-11-15 2017-11-15 2017-11-15  2017-11-15 2017-11-15   
+##  9      2 2017-11-01 2017-11-10 2017-11-01  2017-11-10 2017-11-10   
+## 10      2 2017-11-02 2017-11-03 2017-11-02  2017-11-03 2017-11-10   
+## 11      2 2017-11-02 2017-11-02 2017-11-02  2017-11-02 2017-11-10   
+## 12      2 2017-11-10 2017-11-12 2017-11-10  2017-11-12 2017-11-12   
+## 13      2 2017-11-10 2017-11-10 2017-11-10  2017-11-10 2017-11-12   
+## 14      2 2017-11-13 2017-11-13 2017-11-13  2017-11-13 2017-11-13   
+## 15      2 2017-11-15 2017-11-15 2017-11-15  2017-11-15 2017-11-15   
+## # … with 4 more variables: lag_max_end_date_ &lt;date&gt;, dif_ &lt;int&gt;,
+## #   new_session_ &lt;dbl&gt;, session_id &lt;dbl&gt;</code></pre>
+</div>
+<div id="databases" class="section level1">
+<h1>Databases</h1>
+<p>Since dplyr works on databases by generating SQL we can use this in a database as well. However we do have to write a different version of the function to make sure the dplyr to SQL translation happens correctly. We also need a database that supports analytic queries so SQLite will not work.</p>
+<pre class="r"><code># simulate a database connection
+tbl_dbi &lt;- dbplyr::tbl_lazy(df)
+
+# A version of add_session_id that works on (some) databases
+add_session_id.tbl_dbi &lt;- function(tbl_dbi, start_date, end_date, group, max_gap = 0L, clean_input = T, debug = F){
+  start_date &lt;- rlang::enquo(start_date)
+  end_date &lt;- rlang::enquo(end_date)
+  group &lt;- rlang::parse_expr(group)
+ 
+  tbl_dbi %&gt;%
+    ungroup() %&gt;%
+    # clean data
+    {if(clean_input) filter(., !is.na(!!end_date), !is.na(!!start_date), !!end_date &gt;= !!start_date) else .} %&gt;%
+    # create temp variables that end with _
+    mutate(start_date_ = !!start_date, end_date_ = !!end_date) %&gt;%
+    #  create sessions that group overlapping date ranges together
+    # arrange(!!group, start_date_, desc(end_date_)) %&gt;%
+    group_by(!!group) %&gt;%
+    mutate(lag_end_date_ = order_by(start_date_, lag(end_date_))) %&gt;%
+    # max_end_date_ is monotonic increasing which is important for this to work.
+    dbplyr::window_order(start_date_, desc(end_date_)) %&gt;%
+    mutate(max_end_date_ = cummax(end_date)) %&gt;%
+    # mutate(max_end_date_ = ifelse(!is.na(lag_end_date_) &amp; end_date_ &lt; lag_end_date_, lag_end_date_, end_date_)) %&gt;% # old logic
+    mutate(lag_max_end_date_ = order_by(start_date_, lag(max_end_date_))) %&gt;%
+    # note that datediff is a sql server function. If there is a function in any package or the global environment that is called dy then this function will fail.
+    # mutate(dif_ = datediff(dy, lag_max_end_date_, start_date_)) %&gt;%
+    mutate(dif_ = start_date_ - lag_max_end_date_) %&gt;%
+    mutate(new_session_ = ifelse(is.na(lag_end_date_) | dif_ &gt; max_gap, 1, 0)) %&gt;%
+    mutate(session_id = order_by(start_date_, cumsum(new_session_))) %&gt;%
+    {if(!debug){select(., -start_date_, -end_date_, -lag_end_date_, -max_end_date_, -lag_max_end_date_, -dif_, -new_session_)} else .}
+}
+
+# Look at the generated SQL code
+tbl_dbi %&gt;% 
+  add_session_id.tbl_dbi(start_date, end_date, group = &quot;patkey&quot;) %&gt;% 
+  show_query()</code></pre>
+<pre><code>## &lt;SQL&gt;
+## SELECT `patkey`, `start_date`, `end_date`, `description`, SUM(`new_session_`) OVER (PARTITION BY `patkey` ORDER BY `start_date_` ROWS UNBOUNDED PRECEDING) AS `session_id`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date_`, `end_date_`, `lag_end_date_`, `max_end_date_`, `lag_max_end_date_`, `dif_`, CASE WHEN (((`lag_end_date_`) IS NULL) OR `dif_` &gt; 0) THEN (1.0) WHEN NOT(((`lag_end_date_`) IS NULL) OR `dif_` &gt; 0) THEN (0.0) END AS `new_session_`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date_`, `end_date_`, `lag_end_date_`, `max_end_date_`, `lag_max_end_date_`, `start_date_` - `lag_max_end_date_` AS `dif_`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date_`, `end_date_`, `lag_end_date_`, `max_end_date_`, LAG(`max_end_date_`, 1, NULL) OVER (PARTITION BY `patkey` ORDER BY `start_date_`) AS `lag_max_end_date_`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date_`, `end_date_`, `lag_end_date_`, MAX(`end_date`) OVER (PARTITION BY `patkey` ORDER BY `start_date_`, `end_date_` DESC ROWS UNBOUNDED PRECEDING) AS `max_end_date_`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date_`, `end_date_`, LAG(`end_date_`, 1, NULL) OVER (PARTITION BY `patkey` ORDER BY `start_date_`) AS `lag_end_date_`
+## FROM (SELECT `patkey`, `start_date`, `end_date`, `description`, `start_date` AS `start_date_`, `end_date` AS `end_date_`
+## FROM (SELECT *
+## FROM `df`
+## WHERE ((NOT(((`end_date`) IS NULL))) AND (NOT(((`start_date`) IS NULL))) AND (`end_date` &gt;= `start_date`))) `dbplyr_001`) `dbplyr_002`) `dbplyr_003`) `dbplyr_004`) `dbplyr_005`) `dbplyr_006`) `dbplyr_007`</code></pre>
 </div>
 
     </div>
@@ -97,6 +296,18 @@
 
     </div>
     
+
+
+
+<script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
+
+
+
+<script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/languages/r.min.js"></script>
+<script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/languages/yaml.min.js"></script>
+<script>hljs.configure({languages: []}); hljs.initHighlightingOnLoad();</script>
+
+
 
     
 
