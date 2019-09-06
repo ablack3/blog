@@ -1,5 +1,5 @@
 ---
-title: Sometimes, It's OK to Blame the Tool
+title: Sometimes It's OK to Blame the Tool
 author: ~
 date: '2019-09-06'
 slug: it-s-ok-to-blame-the-tool
