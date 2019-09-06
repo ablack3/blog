@@ -12,14 +12,14 @@ tags:
 ```
 
 
-Often the data we work with health services research fits the definition of event sourced data. In software development *Event Sourcing* has a specific meaning that I am not qualified to explain precisely. Basically any changes to a system are captured as event records. When changes happen they are recorded as event records and the current state of the system at any point in time can be constructed by aggregating all of the event records. This sounds abstract but it is really very common. For example thing about accounting. The records of transactions are the real source of truth and account balances can be inferred at any point in time by aggregating the data in all of the transaction records.
+Often the data we work with health services research fits the definition of event sourced data. In software development *Event Sourcing* has a specific meaning that I am not qualified to explain precisely. Basically any changes to a system are captured as event records. When changes happen they are recorded as event records and the current state of the system at any point in time can be constructed by aggregating all of the event records. This sounds abstract but it is really very common. Take accounting for example. The records of transactions are the real source of truth and account balances can be inferred at any point in time by aggregating the data in all of the transaction records.
 
 I think this concept is strongly applicable to healthcare. Two major sources of data for observational research in healthcare are administrative claims data and electronic medical record data. Both of these data sources can be thought of as event sourced systems in the sense that they record specific events that happen to patients. The current health state of a patient at any point in time can be inferred from a starting state plus the addition of all records of events (diagnoses, procedures, lab tests, etc). 
 
-When we start thinking about healthcare data in an event sourced type framework we can borrow additional concepts from other domains where this type of data exists. Consider for example the problem of sessionization in web analytics. When we visit a website many of our actions like mouse clicks are recorded along with a time stamp and stored in a database. A common analytic task in this domain is to collapse records of events into sessions. [This is so common that some databases even include analytic functions for this specific task](https://www.vertica.com/docs/9.2.x/HTML/Content/Authoring/AnalyzingData/SQLAnalytics/SessionizationWithEvent-basedWindows.htm). While an event is a very granular representation actions a user takes on a website, a session represents an higher level interaction. For example a single session would include logging in to a merchant's website, serarching for a product, adding something to a cart, and checkout. There are lots of mouse click events in this one session. Similarly a "session" in health care might be a patient's entire stay at a hospital during which multiple claims can be generated. 
+When we start thinking about healthcare data as an event sourced system/data structure we can borrow additional concepts from other domains where this type of data exists. Consider for example the problem of sessionization in web analytics. When we visit a website many of our actions like mouse clicks are recorded along with a time stamp and stored in a database. A common analytic task in this domain is to collapse records of events into sessions. [This is so common that some databases even include analytic functions for this specific task](https://www.vertica.com/docs/9.2.x/HTML/Content/Authoring/AnalyzingData/SQLAnalytics/SessionizationWithEvent-basedWindows.htm). While an event is a very granular representation actions a user takes on a website, a session represents an higher level interaction. For example a single session would include logging in to a merchant's website, serarching for a product, adding something to a cart, and checking out. There are lots of mouse click events in this one session. Similarly a "session" in health care might be a patient's entire stay at a hospital during which multiple claims can be generated. 
 
 # The Goal
-Let's write a function that will sessionize event data derived from administrative claims. In order to make sure our function eventually behaves as expected we will first write a test that defines expected behavior. We im"agine our data has a patient key (patkey) as well as a start date and end date. We want to collapse records that have overlapping date ranges or almost overlapping date ranges. What we mean by "almost overlapping" is ultimately up to the user and depends on the context. In some cases we might want to consider two records part of the same event even if there is a one or two day gap between the date ranges. In other cases a one day gap would indicate different "sessions".
+Let's write a function that will sessionize event data derived from administrative claims. In order to make sure our function eventually behaves as expected we will first write a test that defines expected behavior. We imagine our data has a patient key (patkey) as well as a start date and end date. We want to collapse records that have overlapping date ranges or almost overlapping date ranges. What we mean by "almost overlapping" is ultimately up to the user and depends on the context. In some cases we might want to consider two records part of the same event even if there is a one or two day gap between the date ranges. In other cases a one day gap would indicate different "sessions".
 
 
 ```{r}
@@ -48,7 +48,7 @@ df <- tibble::tribble(
  
 ```
 
-Our strategy will by to first order the data so that eariler events come first and when two events start on the same day the one with the longest duration comes first. Then we will a new variable that represents the  where the current session end date is. This is given by the `cummax(end_date)` function. Since cummax doesn't work with dates we need to convert the dates to a number to do the calculation and then convert the numbers back to a date.
+Our strategy will be to first order the data so that eariler events come first and when two events start on the same day the one with the longest duration comes first. Then we will a new variable that represents the  where the current session end date is. This is given by the `cummax(end_date)` function. Since cummax doesn't work with dates we need to convert the dates to a number to do the calculation and then convert the numbers back to a date.
 
 ```{r}
 df %>% 
@@ -64,7 +64,7 @@ df %>%
 
 What is important here is that `max_end_date` is monotonic increasing within patients. This just means that within a given patient's records each max_end_date is either the same or after the previous `max_end_date`. This condition should be satisfied because of the `cummax` function. The output of `cummax` should always be monotonic increasing (ignoring the possibility of missing values). `max_end_date` is the potential end of a session. 
 
-In order to determine where to end sessions we need to answer the question does the current record fall within the previous record's session? The `lag(max_end_date)` will give us the end of the previous session. We will create a parameter to this function, `max_gap`, that will represent the maximum allowed gap to consider two records part of the same session.
+In order to determine where to end sessions we need to answer the question *"Does the current record fall within the previous record's session?"* The `lag(max_end_date)` will give us the end of the previous session. We will create a parameter to this function, `max_gap`, that will represent the maximum allowed gap to consider two records part of the same session.
 
 ```{r}
 max_gap <- 1
@@ -82,7 +82,7 @@ df %>%
 
 ```
 
-The session_id variable is really what we are after here. Within patkey the session_id uniquely identifies session/encounters/episodes or whatever term we want to use for them. If we concatenate patkey and session_id then we have a unique identifier for sessions.
+The session_id variable is really what we are after. Within patkey the session_id uniquely identifies session/encounters/episodes or whatever term we want to use for them. If we concatenate patkey and session_id then we have a unique identifier for sessions.
 
 
 Let's now encapsulate this logic in a function and add some bells and whistles. We will use some tidyeval to allow the user to supply unquoted variable names for the start and end date as well add some data cleaning. I decided to make the `group` argument a string. It just kind of made sense to me because it reminded me of the `by` argument in dplyr's join functions.
